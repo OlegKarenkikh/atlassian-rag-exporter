@@ -1,0 +1,66 @@
+# ============================================================
+# atlassian_rag_exporter — Configuration Example
+# ============================================================
+
+# --- Connection ---
+base_url: "https://yourcompany.atlassian.net"
+is_cloud: true   # Set to false for Confluence Server / Data Center
+
+# --- Authentication ---
+# OPTION 1: Atlassian Cloud — email + API token (Basic auth)
+#   Generate at: https://id.atlassian.com/manage-profile/security/api-tokens
+auth:
+  type: "token"
+  email: "your-email@company.com"
+  token: "YOUR_ATLASSIAN_API_TOKEN"
+
+# OPTION 2: Confluence Server/DC — Personal Access Token (PAT)
+# auth:
+#   type: "pat"
+#   token: "YOUR_PAT_TOKEN"
+
+# OPTION 3: OAuth 2.0 (3LO) Bearer token
+# auth:
+#   type: "oauth2"
+#   access_token: "YOUR_OAUTH_ACCESS_TOKEN"
+
+# --- Confluence spaces to export (omit to export ALL spaces) ---
+spaces:
+  - "ENG"
+  - "DOCS"
+  - "INFRA"
+  - "OPS"
+
+# Incremental sync: only export pages modified since last run
+incremental: true
+
+# --- Output directory ---
+output_dir: "./rag_corpus"
+# Structure:
+#   rag_corpus/
+#     manifest.json
+#     .sync_state.json
+#     pages/<page_id>_<slug>/
+#       content.md
+#       metadata.json
+#     attachments/<checksum>_<filename>
+#     jira/<ISSUE-KEY>.md
+
+# --- Jira export (optional) ---
+jira:
+  base_url: "https://yourcompany.atlassian.net"
+  jql: "project in (ENG, OPS) AND updated >= -30d ORDER BY updated DESC"
+  fields:
+    - summary
+    - description
+    - status
+    - priority
+    - assignee
+    - reporter
+    - labels
+    - components
+    - comment
+    - created
+    - updated
+    - issuetype
+    - project
