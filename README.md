@@ -2,12 +2,31 @@
 
 [![CI](https://github.com/OlegKarenkikh/atlassian-rag-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/OlegKarenkikh/atlassian-rag-exporter/actions)
 [![Python](https://img.shields.io/pypi/pyversions/atlassian-rag-exporter)](https://pypi.org/project/atlassian-rag-exporter/)
-[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen)](docs/TEST_REPORT.md)
+[![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)](docs/TEST_REPORT.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Production-ready пайплайн для экспорта **Confluence**, **Jira** и **Elasticsearch** в структурированный RAG-корпус с поддержкой **8 векторных баз данных**.
 
 > **English documentation:** [README_EN.md](README_EN.md)
+
+---
+
+## Обучающий курс для новичков
+
+> Никогда не слышали про RAG, векторные базы или API? -> **[Начните здесь](course/README.md)**
+
+Курс из 8 глав с иллюстрациями объясняет все технологии проекта простым языком:
+
+| # | Глава | Что узнаете |
+|---|-------|------------|
+| 1 | [Confluence и Jira](course/01-confluence-jira.md) | Как устроены Atlassian-продукты и их API |
+| 2 | [Что такое RAG](course/02-rag.md) | Почему LLM галлюцинирует и как это исправить |
+| 3 | [Эмбеддинги](course/03-embeddings.md) | Как текст превращается в числа |
+| 4 | [Векторные БД](course/04-vector-db.md) | Поиск по смыслу - 8 поддерживаемых баз |
+| 5 | [Архитектура экспортёра](course/05-exporter.md) | Путь данных от Confluence до файловой системы |
+| 6 | [REST API](course/06-api.md) | FastAPI, SSE-стриминг, Swagger UI |
+| 7 | [Тесты](course/07-testing.md) | Пирамида тестов, coverage, pytest |
+| 8 | [Docker](course/08-docker.md) | Запускаем всё в контейнерах |
 
 ---
 
