@@ -1,18 +1,15 @@
 """conftest.py — Shared fixtures and factories for the test suite."""
+
 from __future__ import annotations
 
 import io
-import json
 import struct
 import zlib
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 import atlassian_rag_exporter as m
-
 
 # ---------------------------------------------------------------------------
 # Binary factories
@@ -21,6 +18,7 @@ import atlassian_rag_exporter as m
 
 def make_png(width: int = 4, height: int = 4, color: tuple = (255, 0, 0)) -> bytes:
     """Create a minimal valid PNG file in memory."""
+
     def chunk(name: bytes, data: bytes) -> bytes:
         c = zlib.crc32(name + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + name + data + struct.pack(">I", c)
@@ -54,9 +52,12 @@ def make_docx() -> bytes:
     """Return a minimal DOCX (zip) byte string."""
     buf = io.BytesIO()
     import zipfile
+
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("[Content_Types].xml",
-                    '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        zf.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
     return buf.getvalue()
 
 
