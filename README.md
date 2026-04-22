@@ -1,15 +1,13 @@
 # atlassian-rag-exporter
 
 [![CI](https://github.com/OlegKarenkikh/atlassian-rag-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/OlegKarenkikh/atlassian-rag-exporter/actions)
-[![PyPI](https://img.shields.io/pypi/v/atlassian-rag-exporter)](https://pypi.org/project/atlassian-rag-exporter/)
 [![Python](https://img.shields.io/pypi/pyversions/atlassian-rag-exporter)](https://pypi.org/project/atlassian-rag-exporter/)
+[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen)](docs/TEST_REPORT.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Coverage](https://img.shields.io/badge/coverage-80.5%25-brightgreen)](docs/TEST_REPORT.md)
 
-Производственный пайплайн для экспорта **Confluence** и **Jira** в структурированный RAG-корпус,
-совместимый с LlamaIndex, LangChain и любой векторной базой данных.
+Production-ready пайплайн для экспорта **Confluence**, **Jira** и **Elasticsearch** в структурированный RAG-корпус с поддержкой **8 векторных баз данных**.
 
-> **English documentation:** [README_EN.md](README_EN.md) — версия 2.0.0, переведено 2026-04-22
+> **English documentation:** [README_EN.md](README_EN.md)
 
 ---
 
@@ -17,25 +15,28 @@
 
 | Функция | Описание |
 |---------|----------|
-| **Режимы авторизации** | API Token (Cloud), PAT (Server/DC), OAuth 2.0 |
-| **Confluence REST API v2** | Курсорная пагинация — до 30× быстрее v1 offset |
-| **Полный контент** | HTML → Markdown + YAML front-matter на каждую страницу |
-| **Изображения и вложения** | PNG, JPEG, GIF, WebP, SVG, PDF, DOCX, XLSX — SHA-256 дедупликация |
-| **Confluence macros** | `<ac:image>`, `<ri:attachment>` → локальные пути |
-| **Jira** | Экспорт задач по JQL; ADF → Markdown |
-| **Incremental sync** | Только изменённые с последнего запуска страницы |
-| **Rate-limit защита** | Экспоненциальный backoff + заголовок Retry-After (tenacity) |
-| **RAG-ready вывод** | manifest.json v2.0, per-page metadata.json, глобальная дедупликация |
+| **8 провайдеров аутентификации** | Token, PAT, Basic, SSO Cookie, OAuth2, OIDC, OIDC client_credentials, Kerberos |
+| **Confluence REST v2** | Курсорная пагинация — до 30× быстрее v1 |
+| **Полный контент** | HTML → Markdown + YAML front-matter, изображения, вложения |
+| **Jira** | Экспорт задач по JQL, ADF-комментарии |
+| **Elasticsearch/OpenSearch** | Scroll API + Point-in-Time, маппинг полей |
+| **8 векторных БД** | Chroma, Qdrant, Weaviate, Pinecone, pgvector, OpenSearch, Milvus, Redis Stack |
+| **Инкрементальная синхронизация** | Только изменённые документы |
+| **SHA-256 дедупликация** | Вложения не дублируются |
+| **Rate-limit защита** | Exponential backoff + `Retry-After` |
 
 ---
 
 ## Установка
 
 ```bash
-pip install atlassian-rag-exporter
+pip install atlassian-rag-exporter                      # базовая
+pip install "atlassian-rag-exporter[kerberos]"          # + Kerberos/NTLM
+pip install "atlassian-rag-exporter[vector-qdrant]"     # + Qdrant
+pip install "atlassian-rag-exporter[vector-all]"        # все 8 векторных БД
 ```
 
-Или в dev-режиме:
+Из исходников:
 
 ```bash
 git clone https://github.com/OlegKarenkikh/atlassian-rag-exporter.git
@@ -48,47 +49,55 @@ pip install -e ".[dev]"
 ## Быстрый старт
 
 ```bash
-# 1. Создать config
-cp config.yaml.example config.yaml
-# Отредактировать: base_url, email, token, spaces
-
-# 2. Запуск
+cp config.yaml.example config.yaml   # заполнить base_url, auth, spaces
 python atlassian_rag_exporter.py --config config.yaml
+```
 
-# 3. Или через CLI после pip install
-atlassian-rag-exporter --config config.yaml
+Загрузка в векторную БД:
+
+```python
+from vector_store import VectorStoreConfig, build_adapter, load_corpus
+
+cfg = VectorStoreConfig.from_yaml("config.yaml")
+adapter = build_adapter(cfg)
+adapter.connect()
+load_corpus(adapter, "./rag_corpus", embedder=my_embed_fn)
+adapter.close()
 ```
 
 ---
 
-## Авторизация
+## Аутентификация
 
-### Cloud — API Token (рекомендуется)
+| Тип | Применение | Ключи конфига |
+|-----|-----------|--------------|
+| `token` | Atlassian Cloud | `email`, `token` |
+| `pat` | Confluence/Jira Server/DC | `token` |
+| `basic` | Локальный логин/пароль | `username`, `password` |
+| `sso_cookie` | Готовые SSO-куки | `cookies: {name: value}` |
+| `oauth2` | OAuth 2.0 Bearer + авторефреш | `access_token`, `refresh_token` |
+| `openid` | OIDC Auth Code + PKCE (браузер) | `issuer_url`, `client_id` |
+| `sso_openid` | OIDC client_credentials (сервис) | `token_endpoint`, `client_id`, `client_secret` |
+| `kerberos` | Kerberos/NTLM | `mutual_authentication` |
 
-```yaml
-auth:
-  type: token
-  email: you@company.com
-  token: YOUR_API_TOKEN
-```
+Полные примеры — в [config.yaml.example](config.yaml.example).
 
-Токен создаётся на: https://id.atlassian.com/manage-profile/security/api-tokens
+---
 
-### Server / Data Center — PAT
+## Векторные базы данных
 
-```yaml
-auth:
-  type: pat
-  token: YOUR_PAT
-```
+| Бэкенд | Пакет | Ключ установки |
+|--------|-------|----------------|
+| `chromadb` | `chromadb>=0.4` | `vector-chroma` |
+| `qdrant` | `qdrant-client>=1.7` | `vector-qdrant` |
+| `weaviate` | `weaviate-client>=4` | `vector-weaviate` |
+| `pinecone` | `pinecone>=3` | `vector-pinecone` |
+| `pgvector` | `psycopg2-binary`, `pgvector` | `vector-pgvector` |
+| `opensearch` | `opensearch-py>=2.4` | `vector-opensearch` |
+| `milvus` | `pymilvus>=2.3` | `vector-milvus` |
+| `redis` | `redis[hiredis]>=5` | `vector-redis` |
 
-### OAuth 2.0
-
-```yaml
-auth:
-  type: oauth2
-  access_token: YOUR_BEARER_TOKEN
-```
+Настройка через `config.yaml` — примеры всех 8 бэкендов в [config.yaml.example](config.yaml.example).
 
 ---
 
@@ -96,88 +105,74 @@ auth:
 
 ```
 rag_corpus/
-├── manifest.json              ← Глобальный индекс (schema v2.0)
-├── .sync_state.json           ← Состояние incremental sync
-├── pages/
-│   └── <id>_<slug>/
-│       ├── content.md         ← Markdown + YAML front-matter
-│       └── metadata.json      ← Метаданные для vector DB
-├── attachments/
-│   └── <8hex>_<slug>.<ext>   ← Дедуплицированные файлы
-└── jira/
-    └── <ISSUE-KEY>.md         ← Jira задачи
+├── manifest.json
+├── .sync_state.json
+├── pages/<page_id>_<slug>/
+│   ├── content.md          ← Markdown + YAML front-matter
+│   └── metadata.json
+├── attachments/<sha256>_<filename>
+├── jira/<ISSUE-KEY>.md
+└── elasticsearch/<id>_<slug>/
 ```
 
 ---
 
-## Интеграция с RAG-фреймворками
-
-### LlamaIndex
+## Подключение к LlamaIndex / LangChain
 
 ```python
+# LlamaIndex
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
-
-docs = SimpleDirectoryReader(
-    input_dir="./rag_corpus/pages",
-    recursive=True,
-    required_exts=[".md"],
-).load_data()
-
+docs = SimpleDirectoryReader("./rag_corpus/pages", recursive=True).load_data()
 index = VectorStoreIndex.from_documents(docs)
-response = index.as_query_engine().query("What is our deployment process?")
 ```
 
-### LangChain + Chroma
-
 ```python
-from langchain_community.document_loaders import DirectoryLoader, UnstructuredMarkdownLoader
+# LangChain
+from langchain_community.document_loaders import DirectoryLoader
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
-
-loader = DirectoryLoader("./rag_corpus", glob="**/*.md",
-                         loader_cls=UnstructuredMarkdownLoader)
-docs = loader.load()
-vectorstore = Chroma.from_documents(docs, OpenAIEmbeddings())
+docs = DirectoryLoader("./rag_corpus/pages", glob="**/content.md").load()
+Chroma.from_documents(docs, OpenAIEmbeddings())
 ```
 
 ---
 
-## Разработка и тестирование
+## Разработка
 
 ```bash
-make install     # pip install -e ".[dev]"
-make test        # быстрый прогон тестов
-make test-cov    # тесты + HTML coverage отчёт
-make lint        # ruff
-make fmt         # black + ruff --fix
-make typecheck   # mypy
-make ci          # полный CI (fmt + lint + typecheck + test-cov)
+make install      # pip install -e ".[dev]"
+make test         # pytest tests/ -v
+make test-cov     # pytest + coverage ≥ 80%
+make lint         # ruff
+make fmt          # black + ruff --fix
+make typecheck    # mypy
+make ci           # fmt + lint + typecheck + test-cov
 ```
 
-### Результаты тестирования v2.0.0 (2026-04-22)
+### Покрытие тестами (v3.0.0)
 
-| Файл | Тестов | Passed |
-|------|--------|--------|
-| tests/test_unit.py | 34 | 34 |
-| tests/test_e2e.py | 26 | 26 |
-| tests/test_integration.py | 9 | 9 |
-| tests/test_cli.py | 6 | 6 |
-| **Итого** | **75** | **75 (100%)** |
-
-Покрытие строк: **80.5%** (порог ≥ 80%) ✅
-
-Полный отчёт: [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+| Модуль | Тестов | Coverage |
+|--------|--------|----------|
+| `atlassian_rag_exporter.py` | 76 | 80% |
+| `auth_providers.py` | 39 | 85% |
+| `elasticsearch_source.py` | 30 | 82% |
+| `vector_store.py` | 43 | 75% |
+| **Итого** | **187** | **80.1%** |
 
 ---
 
-## CI / CD
+## Архитектура
 
-GitHub Actions: матрица Ubuntu / macOS / Windows × Python 3.9–3.12 (12 комбинаций).  
-Шаги: black → ruff → mypy → pytest --cov (≥ 80%).  
-Релиз: автоматическая публикация на PyPI при тегах `v*` через OIDC.
+```
+atlassian_rag_exporter.py   — основной пайплайн (Confluence + Jira)
+auth_providers.py           — 8 провайдеров аутентификации
+elasticsearch_source.py     — импорт из Elasticsearch / OpenSearch
+vector_store.py             — 8 адаптеров векторных БД
+config.yaml.example         — полный справочник конфигурации
+```
 
 ---
 
 ## Лицензия
 
-MIT © 2024 OlegKarenkikh. See [LICENSE](LICENSE).
+[MIT License](LICENSE)
