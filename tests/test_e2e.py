@@ -1,4 +1,5 @@
 """test_e2e.py — End-to-end tests for RAGExporter pipeline."""
+
 from __future__ import annotations
 
 import json
@@ -6,19 +7,21 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import atlassian_rag_exporter as m
-from tests.conftest import make_png, make_pdf
+from tests.conftest import make_pdf, make_png
 
 
 class TestSaveAttachment:
     def test_saves_png(self, exporter, tmp_out):
-        att = {"title": "arch.png", "mediaType": "image/png",
-               "_links": {"download": "/wiki/download/arch.png"}}
+        att = {
+            "title": "arch.png",
+            "mediaType": "image/png",
+            "_links": {"download": "/wiki/download/arch.png"},
+        }
         exporter.confluence.get_attachment_download_url = MagicMock(
-            return_value="https://test.atlassian.net/wiki/download/arch.png")
+            return_value="https://test.atlassian.net/wiki/download/arch.png"
+        )
         exporter.confluence.session.get_binary = MagicMock(return_value=make_png())
         rec = exporter._save_attachment(att)
         assert rec is not None
@@ -29,7 +32,8 @@ class TestSaveAttachment:
         att = {"title": "logo.png", "mediaType": "image/png"}
         png_data = make_png(2, 2, (10, 20, 30))
         exporter.confluence.get_attachment_download_url = MagicMock(
-            return_value="https://test.atlassian.net/logo.png")
+            return_value="https://test.atlassian.net/logo.png"
+        )
         exporter.confluence.session.get_binary = MagicMock(return_value=png_data)
         r1 = exporter._save_attachment(att)
         r2 = exporter._save_attachment(att)
@@ -38,14 +42,17 @@ class TestSaveAttachment:
 
     def test_skips_unsupported_extension(self, exporter):
         att = {"title": "virus.exe", "mediaType": "application/octet-stream"}
-        exporter.confluence.get_attachment_download_url = MagicMock(return_value="https://x.com/v.exe")
+        exporter.confluence.get_attachment_download_url = MagicMock(
+            return_value="https://x.com/v.exe"
+        )
         rec = exporter._save_attachment(att)
         assert rec is None
 
     def test_saves_pdf(self, exporter, tmp_out):
         att = {"title": "report.pdf", "mediaType": "application/pdf"}
         exporter.confluence.get_attachment_download_url = MagicMock(
-            return_value="https://test.atlassian.net/report.pdf")
+            return_value="https://test.atlassian.net/report.pdf"
+        )
         exporter.confluence.session.get_binary = MagicMock(return_value=make_pdf())
         rec = exporter._save_attachment(att)
         assert rec is not None
@@ -53,7 +60,9 @@ class TestSaveAttachment:
 
     def test_handles_download_error(self, exporter):
         att = {"title": "broken.png"}
-        exporter.confluence.get_attachment_download_url = MagicMock(return_value="https://x.com/b.png")
+        exporter.confluence.get_attachment_download_url = MagicMock(
+            return_value="https://x.com/b.png"
+        )
         exporter.confluence.session.get_binary = MagicMock(side_effect=ConnectionError("timeout"))
         rec = exporter._save_attachment(att)
         assert rec is None
@@ -98,8 +107,11 @@ class TestHtmlToMarkdown:
 
 class TestExportPageE2E:
     def _mock_page(self):
-        return {"id": "100", "title": "Architecture Guide",
-                "_links": {"webui": "/spaces/ENG/pages/100"}}
+        return {
+            "id": "100",
+            "title": "Architecture Guide",
+            "_links": {"webui": "/spaces/ENG/pages/100"},
+        }
 
     def _mock_body(self):
         return (
@@ -147,12 +159,13 @@ class TestExportPageE2E:
 
     def test_with_png_attachment(self, exporter, tmp_out):
         exporter.confluence.get_page_body = MagicMock(return_value=self._mock_body())
-        exporter.confluence.get_attachments = MagicMock(return_value=[
-            {"title": "arch.png", "mediaType": "image/png"}
-        ])
+        exporter.confluence.get_attachments = MagicMock(
+            return_value=[{"title": "arch.png", "mediaType": "image/png"}]
+        )
         exporter.confluence.get_page_labels = MagicMock(return_value=[])
         exporter.confluence.get_attachment_download_url = MagicMock(
-            return_value="https://test.atlassian.net/wiki/dl/arch.png")
+            return_value="https://test.atlassian.net/wiki/dl/arch.png"
+        )
         exporter.confluence.session.get_binary = MagicMock(return_value=make_png())
         exporter._export_page(self._mock_page(), "ENG", "Engineering")
         md_file = list(tmp_out.rglob("content.md"))[0]
@@ -165,9 +178,12 @@ class TestJiraExport:
             "key": key,
             "fields": {
                 "summary": "Fix the login bug",
-                "description": {"type": "doc", "content": [
-                    {"type": "paragraph", "content": [{"type": "text", "text": "Details here"}]}
-                ]},
+                "description": {
+                    "type": "doc",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "Details here"}]}
+                    ],
+                },
                 "status": {"name": "In Progress"},
                 "priority": {"name": "High"},
                 "assignee": {"displayName": "Bob"},
@@ -177,10 +193,15 @@ class TestJiraExport:
                 "labels": ["login", "auth"],
                 "created": "2024-01-15",
                 "updated": "2024-06-01",
-                "comment": {"comments": [
-                    {"author": {"displayName": "Carol"}, "created": "2024-02-01",
-                     "body": "Reproduced on prod"}
-                ]},
+                "comment": {
+                    "comments": [
+                        {
+                            "author": {"displayName": "Carol"},
+                            "created": "2024-02-01",
+                            "body": "Reproduced on prod",
+                        }
+                    ]
+                },
             },
         }
 
@@ -213,8 +234,14 @@ class TestJiraExport:
 class TestManifest:
     def test_write_manifest(self, exporter, tmp_out):
         exporter._manifest = [
-            {"type": "confluence_page", "page_id": "1", "title": "T", "space_key": "ENG",
-             "md_path": "pages/1_t/content.md", "json_path": "pages/1_t/metadata.json"},
+            {
+                "type": "confluence_page",
+                "page_id": "1",
+                "title": "T",
+                "space_key": "ENG",
+                "md_path": "pages/1_t/content.md",
+                "json_path": "pages/1_t/metadata.json",
+            },
         ]
         exporter._result.confluence_pages = 1
         exporter.write_manifest()
