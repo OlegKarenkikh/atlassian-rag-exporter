@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
@@ -57,6 +58,68 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("atlassian_rag_exporter")
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AttachmentRecord:
+    filename: str
+    local_path: str
+    checksum: str
+    media_type: str
+    mime_type: str
+    size_bytes: int
+    created: str
+
+    @property
+    def is_image(self) -> bool:
+        return self.media_type == "image"
+
+    def to_dict(self) -> Dict:
+        return {
+            "filename": self.filename,
+            "local_path": self.local_path,
+            "checksum": self.checksum,
+            "media_type": self.media_type,
+            "mime_type": self.mime_type,
+            "size_bytes": self.size_bytes,
+            "created": self.created,
+        }
+
+    def __getitem__(self, key: str):
+        return self.to_dict()[key]
+
+    def __repr__(self) -> str:
+        return f"AttachmentRecord(filename={self.filename!r}, media_type={self.media_type!r})"
+
+
+@dataclass
+class ExportResult:
+    confluence_pages: int = 0
+    jira_issues: int = 0
+    errors: int = 0
+
+    @property
+    def total_documents(self) -> int:
+        return self.confluence_pages + self.jira_issues
+
+    def to_dict(self) -> Dict:
+        return {
+            "confluence_pages": self.confluence_pages,
+            "jira_issues": self.jira_issues,
+            "errors": self.errors,
+            "total_documents": self.total_documents,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"ExportResult(confluence_pages={self.confluence_pages}, "
+            f"jira_issues={self.jira_issues}, errors={self.errors})"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Custom Markdown Converter  (preserves local image references)
@@ -91,6 +154,7 @@ class ConfluenceMarkdownConverter(MarkdownConverter):
             return f"![image]({url})\n\n"
         return ""
 
+
 # ---------------------------------------------------------------------------
 # HTTP Session with retry + rate-limit handling
 # ---------------------------------------------------------------------------
@@ -100,6 +164,8 @@ class AtlassianSession:
     RETRY_STATUSES = {429, 500, 502, 503, 504}
 
     def __init__(self, base_url: str, auth_type: str, **auth_kwargs):
+        if not base_url:
+            raise ValueError("base_url must not be empty")
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update(
@@ -145,6 +211,7 @@ class AtlassianSession:
         resp = self.get(url)
         resp.raise_for_status()
         return resp.content
+
 
 # ---------------------------------------------------------------------------
 # Confluence API v2 Client (Cloud) with v1 fallback
@@ -210,7 +277,7 @@ class ConfluenceClient:
         for page in self._paginate_v2("/pages", params=params):
             yield page
 
-    def get_page_body(self, page_id: str) -> Tuple[str, str]:
+    def get_page_body(self, page_id: str) -> Tuple[str, str, Dict]:
         url = f"{self.api_v1}/content/{page_id}"
         params = {"expand": "body.storage,body.view,version,ancestors,metadata.labels"}
         data = self.session.get_json(url, params=params)
@@ -302,6 +369,8 @@ class RAGExporter:
         self.jira_dir = self.output_dir / "jira"
         self._setup_dirs()
         self._load_state()
+        self._manifest: List[Dict] = []
+        self._result: ExportResult = ExportResult()
 
         auth = config["auth"]
         session = AtlassianSession(
@@ -323,24 +392,22 @@ class RAGExporter:
         else:
             self.jira = None
 
-        self.manifest: List[Dict] = []
-
     def _setup_dirs(self):
         for d in [self.output_dir, self.attachments_dir, self.pages_dir, self.jira_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
     def _load_state(self):
         state_file = self.output_dir / ".sync_state.json"
-        self.state = {}
+        self._state: Dict = {}
         if state_file.exists():
             with open(state_file) as f:
-                self.state = json.load(f)
+                self._state = json.load(f)
         self._state_file = state_file
 
     def _save_state(self):
-        self._state_file.write_text(json.dumps(self.state, indent=2))
+        self._state_file.write_text(json.dumps(self._state, indent=2))
 
-    def _save_attachment(self, att: Dict, page_slug: str) -> Optional[Dict]:
+    def _save_attachment(self, att: Dict) -> Optional[AttachmentRecord]:
         title = att.get("title") or att.get("filename") or "attachment"
         ext = Path(title).suffix.lower()
         if ext not in SUPPORTED_ATTACHMENT_TYPES:
@@ -366,15 +433,15 @@ class RAGExporter:
         rel_path = str(att_path.relative_to(self.output_dir))
         is_image = ext in SUPPORTED_IMAGE_TYPES
 
-        return {
-            "filename": title,
-            "local_path": rel_path,
-            "checksum": checksum,
-            "media_type": "image" if is_image else "document",
-            "mime_type": att.get("mediaType") or att.get("mimeType", ""),
-            "size_bytes": len(content),
-            "created": att.get("metadata", {}).get("createdDate") or att.get("createdAt", ""),
-        }
+        return AttachmentRecord(
+            filename=title,
+            local_path=rel_path,
+            checksum=checksum,
+            media_type="image" if is_image else "document",
+            mime_type=att.get("mediaType") or att.get("mimeType", ""),
+            size_bytes=len(content),
+            created=att.get("metadata", {}).get("createdDate") or att.get("createdAt", ""),
+        )
 
     def _html_to_markdown(self, html: str, attachment_map: Dict[str, str]) -> str:
         soup = BeautifulSoup(html, "html.parser")
@@ -423,7 +490,12 @@ class RAGExporter:
         }
         return "---\n" + yaml.dump(safe, allow_unicode=True, default_flow_style=False) + "---\n\n"
 
-    def _write_page_document(self, page_meta: Dict, markdown_body: str, attachments_meta: List[Dict]) -> Dict:
+    def _write_page_document(
+        self,
+        page_meta: Dict,
+        markdown_body: str,
+        attachments_meta: List[AttachmentRecord],
+    ) -> Dict:
         page_id = page_meta["page_id"]
         slug = slugify(page_meta["title"])
         page_dir = self.pages_dir / f"{page_id}_{slug}"
@@ -444,7 +516,7 @@ class RAGExporter:
             "version": page_meta.get("version", 1),
             "has_attachments": bool(attachments_meta),
             "attachment_count": len(attachments_meta),
-            "image_count": sum(1 for a in attachments_meta if a["media_type"] == "image"),
+            "image_count": sum(1 for a in attachments_meta if a.is_image),
         }
         md_content = self._yaml_front_matter(front) + markdown_body
         md_path = page_dir / "content.md"
@@ -453,7 +525,7 @@ class RAGExporter:
         doc_record = {
             **front,
             "content_markdown_path": str(md_path.relative_to(self.output_dir)),
-            "attachments": attachments_meta,
+            "attachments": [a.to_dict() for a in attachments_meta],
             "word_count": len(markdown_body.split()),
             "char_count": len(markdown_body),
             "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -477,7 +549,7 @@ class RAGExporter:
 
         modified_since = None
         if self.config.get("incremental"):
-            modified_since = self.state.get(space_key)
+            modified_since = self._state.get(space_key)
 
         pages = list(
             tqdm(
@@ -493,8 +565,10 @@ class RAGExporter:
                 count += 1
             except Exception as e:
                 logger.error("Failed to export page %s: %s", page.get("id"), e)
+                self._result.errors += 1
 
-        self.state[space_key] = datetime.now(timezone.utc).isoformat()
+        self._state[space_key] = datetime.now(timezone.utc).isoformat()
+        self._result.confluence_pages += count
         return count
 
     def _export_page(self, page: Dict, space_key: str, space_name: str):
@@ -518,26 +592,25 @@ class RAGExporter:
         labels = self.confluence.get_page_labels(page_id)
 
         raw_attachments = self.confluence.get_attachments(page_id)
-        page_slug = slugify(title)
         attachment_map: Dict[str, str] = {}
-        attachments_meta: List[Dict] = []
+        attachments_meta: List[AttachmentRecord] = []
 
         for att in raw_attachments:
-            meta = self._save_attachment(att, page_slug)
+            meta = self._save_attachment(att)
             if meta:
                 attachments_meta.append(meta)
-                attachment_map[meta["filename"]] = meta["local_path"]
-                fname = os.path.basename(meta["filename"])
-                attachment_map[fname] = meta["local_path"]
+                attachment_map[meta.filename] = meta.local_path
+                fname = os.path.basename(meta.filename)
+                attachment_map[fname] = meta.local_path
 
         html_source = view_body or storage_body
         markdown_body = self._html_to_markdown(html_source, attachment_map)
 
-        images = [a for a in attachments_meta if a["media_type"] == "image"]
+        images = [a for a in attachments_meta if a.is_image]
         if images:
             img_section = "\n\n## Attached Images\n\n"
             for img in images:
-                img_section += f"![{img['filename']}]({img['local_path']})\n\n"
+                img_section += f"![{img.filename}]({img.local_path})\n\n"
             markdown_body += img_section
 
         page_meta = {
@@ -554,7 +627,7 @@ class RAGExporter:
             "version": version_num,
         }
         entry = self._write_page_document(page_meta, markdown_body, attachments_meta)
-        self.manifest.append(entry)
+        self._manifest.append(entry)
 
     def export_jira(self, jql: str, fields: List[str] = None):
         if not self.jira:
@@ -570,6 +643,7 @@ class RAGExporter:
         issues = list(tqdm(self.jira.search_issues(jql, fields), desc="Jira issues", unit="issue"))
         for issue in issues:
             self._export_jira_issue(issue)
+            self._result.jira_issues += 1
 
     def _export_jira_issue(self, issue: Dict):
         key = issue.get("key", "UNKNOWN")
@@ -625,20 +699,26 @@ class RAGExporter:
         full_md = front_matter + markdown_body
         out_path = self.jira_dir / f"{key}.md"
         out_path.write_text(full_md, encoding="utf-8")
-        self.manifest.append({"type": "jira_issue", "issue_key": key, "summary": summary,
-                               "md_path": str(out_path.relative_to(self.output_dir))})
+        self._manifest.append({
+            "type": "jira_issue",
+            "issue_key": key,
+            "summary": summary,
+            "md_path": str(out_path.relative_to(self.output_dir)),
+        })
 
     def write_manifest(self):
         manifest_path = self.output_dir / "manifest.json"
         manifest_data = {
+            "schema_version": "2.0",
             "exported_at": datetime.now(timezone.utc).isoformat(),
-            "total_documents": len(self.manifest),
-            "confluence_pages": sum(1 for d in self.manifest if d["type"] == "confluence_page"),
-            "jira_issues": sum(1 for d in self.manifest if d["type"] == "jira_issue"),
-            "documents": self.manifest,
+            "total_documents": len(self._manifest),
+            "confluence_pages": self._result.confluence_pages,
+            "jira_issues": self._result.jira_issues,
+            "errors": self._result.errors,
+            "documents": self._manifest,
         }
         manifest_path.write_text(json.dumps(manifest_data, indent=2, ensure_ascii=False), encoding="utf-8")
-        logger.info("Manifest written: %d documents", len(self.manifest))
+        logger.info("Manifest written: %d documents", len(self._manifest))
 
     def run(self):
         cfg = self.config
@@ -695,7 +775,8 @@ output_dir: \"./rag_corpus\"
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Export Atlassian Confluence/Jira to a structured RAG corpus.")
-    p.add_argument("--config", required=True, help="Path to YAML config file")
+    p.add_argument("--config", default=None, help="Path to YAML config file")
+    p.add_argument("--version", action="version", version="atlassian-rag-exporter 2.0.0")
     p.add_argument("--print-example-config", action="store_true")
     p.add_argument("--spaces", nargs="+")
     p.add_argument("--output-dir")
@@ -703,28 +784,44 @@ def build_arg_parser():
     return p
 
 
-def main():
+def main(argv=None) -> int:
     parser = build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.print_example_config:
         print(EXAMPLE_CONFIG)
-        return
+        return 0
+
+    if args.config is None:
+        parser.print_usage()
+        return 2
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(args.config) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error("Config file not found: %s", args.config)
+        return 1
 
     if args.spaces:
         config["spaces"] = args.spaces
     if args.output_dir:
         config["output_dir"] = args.output_dir
 
-    exporter = RAGExporter(config)
-    exporter.run()
+    try:
+        exporter = RAGExporter(config)
+        exporter.run()
+    except (ValueError, KeyError) as exc:
+        logger.error("Configuration error: %s", exc)
+        return 1
+    except Exception as exc:
+        logger.error("Unexpected error: %s", exc)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
