@@ -29,16 +29,16 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Check formatting (black)
-        run: python -m black --check atlassian_rag_exporter.py tests/
+        run: python -m black --check atlassian_rag_exporter.py auth_providers.py elasticsearch_source.py tests/
 
       - name: Lint (ruff)
-        run: python -m ruff check atlassian_rag_exporter.py tests/
+        run: python -m ruff check atlassian_rag_exporter.py auth_providers.py elasticsearch_source.py tests/
 
       - name: Type check (mypy)
-        run: python -m mypy atlassian_rag_exporter.py
+        run: python -m mypy atlassian_rag_exporter.py auth_providers.py elasticsearch_source.py
 
       - name: Run tests with coverage
-        run: python -m pytest tests/ -v --tb=short --cov=atlassian_rag_exporter --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=80
+        run: python -m pytest tests/ -v --tb=short --cov=atlassian_rag_exporter --cov=auth_providers --cov=elasticsearch_source --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=80
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
