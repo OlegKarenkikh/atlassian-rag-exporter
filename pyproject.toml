@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atlassian-rag-exporter"
-version = "2.0.0"
+version = "1.0.0"
 description = "Export Atlassian Confluence/Jira to a structured RAG corpus"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 keywords = ["atlassian", "confluence", "jira", "rag", "llm", "export"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -51,7 +51,7 @@ testpaths = ["tests"]
 addopts = "--tb=short -q"
 
 [tool.coverage.run]
-source = ["atlassian_rag_exporter", "auth_providers", "elasticsearch_source"]
+source = ["atlassian_rag_exporter", "auth_providers", "elasticsearch_source", "embedder", "vector_store", "rag_api", "rag_tester", "webhook_listener", "azure_devops_source"]
 omit = ["tests/*"]
 
 [tool.black]
