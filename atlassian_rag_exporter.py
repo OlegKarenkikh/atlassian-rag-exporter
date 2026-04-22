@@ -49,6 +49,8 @@ from tenacity import (
 )
 from tqdm import tqdm
 
+from auth_providers import AuthProvider, build_auth_provider  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -164,7 +166,13 @@ class AtlassianSession:
 
     RETRY_STATUSES = {429, 500, 502, 503, 504}
 
-    def __init__(self, base_url: str, auth_type: str, **auth_kwargs):
+    def __init__(
+        self,
+        base_url: str,
+        auth_type: str,
+        auth_provider: Optional[AuthProvider] = None,
+        **auth_kwargs,
+    ):
         if not base_url:
             raise ValueError("base_url must not be empty")
         self.base_url = base_url.rstrip("/")
@@ -172,16 +180,19 @@ class AtlassianSession:
         self.session.headers.update(
             {"Content-Type": "application/json", "Accept": "application/json"}
         )
-        if auth_type == "token":
-            email = auth_kwargs["email"]
-            token = auth_kwargs["token"]
-            self.session.auth = (email, token)
-        elif auth_type == "pat":
-            self.session.headers["Authorization"] = f"Bearer {auth_kwargs['token']}"
-        elif auth_type == "oauth2":
-            self.session.headers["Authorization"] = f"Bearer {auth_kwargs['access_token']}"
+        if auth_provider is not None:
+            self._auth_provider: Optional[AuthProvider] = auth_provider
         else:
-            raise ValueError(f"Unknown auth_type: {auth_type}")
+            self._auth_provider = build_auth_provider({"type": auth_type, **auth_kwargs})
+        self._auth_provider.apply(self.session, self.base_url)
+
+    def _ensure_token_valid(self) -> None:
+        """Auto-refresh token if provider reports it expired."""
+        if self._auth_provider is None:
+            return
+        if getattr(self._auth_provider, "is_expired", False):
+            logger.info("Token expired — refreshing...")
+            self._auth_provider.refresh(self.session, self.base_url)
 
     @retry(
         retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
@@ -193,6 +204,7 @@ class AtlassianSession:
         if not url.startswith("http"):
             url = self.base_url + url
         while True:
+            self._ensure_token_valid()
             resp = self.session.get(url, timeout=30, **kwargs)
             if resp.status_code == 429:
                 retry_after = int(resp.headers.get("Retry-After", 10))
