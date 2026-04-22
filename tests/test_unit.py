@@ -1,9 +1,9 @@
 """test_unit.py — Unit tests for pure functions and data classes."""
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from bs4 import BeautifulSoup
@@ -125,9 +125,7 @@ class TestExportResult:
 
 class TestConfluenceMarkdownConverter:
     def _make_conv(self, att_map=None):
-        return m.ConfluenceMarkdownConverter(
-            attachment_map=att_map or {}, heading_style="ATX"
-        )
+        return m.ConfluenceMarkdownConverter(attachment_map=att_map or {}, heading_style="ATX")
 
     def test_img_in_map(self):
         html = '<img src="/wiki/dl/arch.png" data-linked-resource-default-alias="arch.png" alt="diagram">'
