@@ -41,11 +41,11 @@ import yaml
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 from tenacity import (
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    before_sleep_log,
 )
 from tqdm import tqdm
 
@@ -63,6 +63,7 @@ logger = logging.getLogger("atlassian_rag_exporter")
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class AttachmentRecord:
@@ -127,7 +128,7 @@ class ExportResult:
 class ConfluenceMarkdownConverter(MarkdownConverter):
     """Extends markdownify to handle Confluence-specific HTML and local images."""
 
-    def __init__(self, attachment_map: Dict[str, str] = None, **kwargs):
+    def __init__(self, attachment_map: Optional[Dict[str, str]] = None, **kwargs):
         super().__init__(**kwargs)
         self.attachment_map = attachment_map or {}  # filename → local_rel_path
 
@@ -228,23 +229,23 @@ class ConfluenceClient:
         self.api_v2 = "/wiki/api/v2" if is_cloud else "/rest/api"
         self.api_v1 = "/wiki/rest/api" if is_cloud else "/rest/api"
 
-    def _paginate_v2(self, path: str, params: Dict = None) -> Generator:
+    def _paginate_v2(self, path: str, params: Optional[Dict] = None) -> Generator:
         """Cursor-based pagination for API v2 endpoints."""
         params = params or {}
         params.setdefault("limit", 50)
-        url = self.api_v2 + path
-        while url:
+        url: str = self.api_v2 + path
+        while True:
             data = self.session.get_json(url, params=params)
             for item in data.get("results", []):
                 yield item
-            next_link = data.get("_links", {}).get("next")
+            next_link: Optional[str] = data.get("_links", {}).get("next")
             if next_link:
                 url = self.api_v2 + next_link if not next_link.startswith("http") else next_link
                 params = {}
             else:
-                url = None
+                break
 
-    def _paginate_v1(self, path: str, params: Dict = None) -> Generator:
+    def _paginate_v1(self, path: str, params: Optional[Dict] = None) -> Generator:
         """Offset-based pagination for API v1 endpoints."""
         params = params or {}
         params.setdefault("limit", 50)
@@ -263,7 +264,7 @@ class ConfluenceClient:
             else:
                 break
 
-    def get_spaces(self, space_keys: List[str] = None) -> List[Dict]:
+    def get_spaces(self, space_keys: Optional[List[str]] = None) -> List[Dict]:
         spaces = []
         for sp in self._paginate_v2("/spaces"):
             if not space_keys or sp.get("key") in space_keys:
@@ -322,7 +323,7 @@ class JiraClient:
         self.session = session
         self.api = "/rest/api/3"
 
-    def search_issues(self, jql: str, fields: List[str] = None) -> Generator:
+    def search_issues(self, jql: str, fields: Optional[List[str]] = None) -> Generator:
         fields_str = ",".join(fields) if fields else "*navigable"
         start = 0
         page_size = 50
@@ -343,10 +344,23 @@ class JiraClient:
 # RAG Document Builder
 # ---------------------------------------------------------------------------
 SUPPORTED_IMAGE_TYPES = {
-    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tiff",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".bmp",
+    ".tiff",
 }
 SUPPORTED_ATTACHMENT_TYPES = SUPPORTED_IMAGE_TYPES | {
-    ".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".csv", ".md",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".csv",
+    ".md",
 }
 
 
@@ -381,6 +395,7 @@ class RAGExporter:
         is_cloud = config.get("is_cloud", True)
         self.confluence = ConfluenceClient(session, is_cloud=is_cloud)
 
+        self.jira: Optional[JiraClient] = None
         if config.get("jira"):
             jira_cfg = config["jira"]
             jira_session = AtlassianSession(
@@ -389,8 +404,6 @@ class RAGExporter:
                 **{k: v for k, v in auth.items() if k != "type"},
             )
             self.jira = JiraClient(jira_session)
-        else:
-            self.jira = None
 
     def _setup_dirs(self):
         for d in [self.output_dir, self.attachments_dir, self.pages_dir, self.jira_dir]:
@@ -447,26 +460,24 @@ class RAGExporter:
         soup = BeautifulSoup(html, "html.parser")
 
         for ac_img in soup.find_all("ac:image"):
-            ri_att = ac_img.find("ri:attachment")
-            ri_url = ac_img.find("ri:url")
+            ri_att = ac_img.find("ri:attachment")  # type: ignore[union-attr]
+            ri_url = ac_img.find("ri:url")  # type: ignore[union-attr]
             img_tag = soup.new_tag("img")
             if ri_att:
-                fname = ri_att.get("ri:filename", "")
+                fname = str(ri_att.get("ri:filename", ""))  # type: ignore[union-attr]
                 local = attachment_map.get(fname, f"attachments/{fname}")
-                img_tag["src"] = local
-                img_tag["alt"] = fname
+                img_tag["src"] = local  # type: ignore[index]
+                img_tag["alt"] = fname  # type: ignore[index]
             elif ri_url:
-                img_tag["src"] = ri_url.get("ri:value", "")
-                img_tag["alt"] = "image"
+                img_tag["src"] = str(ri_url.get("ri:value", ""))  # type: ignore[union-attr,index]
+                img_tag["alt"] = "image"  # type: ignore[index]
             ac_img.replace_with(img_tag)
 
         for img in soup.find_all("img"):
-            src = img.get("src", "")
-            fname = img.get("data-linked-resource-default-alias") or os.path.basename(
-                urlparse(src).path
-            )
+            src = str(img.get("src", ""))  # type: ignore[union-attr]
+            fname = str(img.get("data-linked-resource-default-alias") or os.path.basename(urlparse(src).path))  # type: ignore[union-attr]
             if fname in attachment_map:
-                img["src"] = attachment_map[fname]
+                img["src"] = attachment_map[fname]  # type: ignore[index]
 
         for tag in soup.find_all(class_=re.compile(r"(toc|breadcrumb|footer|header|nav)")):
             tag.decompose()
@@ -542,9 +553,9 @@ class RAGExporter:
         }
 
     def export_space(self, space: Dict) -> int:
-        space_id = space.get("id") or space.get("key")
-        space_key = space.get("key", space_id)
-        space_name = space.get("name", space_key)
+        space_id: str = str(space.get("id") or space.get("key") or "")
+        space_key: str = str(space.get("key") or space_id)
+        space_name: str = str(space.get("name") or space_key)
         logger.info("Exporting space: %s (%s)", space_name, space_key)
 
         modified_since = None
@@ -572,7 +583,7 @@ class RAGExporter:
         return count
 
     def _export_page(self, page: Dict, space_key: str, space_name: str):
-        page_id = page.get("id")
+        page_id: str = str(page.get("id") or "")
         title = page.get("title", f"page_{page_id}")
         page_url = page.get("_links", {}).get("webui", "")
         if page_url and not page_url.startswith("http"):
@@ -581,10 +592,9 @@ class RAGExporter:
         storage_body, view_body, full_data = self.confluence.get_page_body(page_id)
 
         version = full_data.get("version", {})
-        author = (
-            version.get("by", {}).get("displayName", "")
-            or full_data.get("history", {}).get("createdBy", {}).get("displayName", "")
-        )
+        author = version.get("by", {}).get("displayName", "") or full_data.get("history", {}).get(
+            "createdBy", {}
+        ).get("displayName", "")
         created_at = full_data.get("history", {}).get("createdDate", "")
         updated_at = version.get("when", "")
         version_num = version.get("number", 1)
@@ -629,14 +639,24 @@ class RAGExporter:
         entry = self._write_page_document(page_meta, markdown_body, attachments_meta)
         self._manifest.append(entry)
 
-    def export_jira(self, jql: str, fields: List[str] = None):
+    def export_jira(self, jql: str, fields: Optional[List[str]] = None):
         if not self.jira:
             logger.warning("Jira not configured.")
             return
         default_fields = [
-            "summary", "description", "status", "priority", "assignee",
-            "reporter", "labels", "components", "created", "updated",
-            "issuetype", "project", "comment",
+            "summary",
+            "description",
+            "status",
+            "priority",
+            "assignee",
+            "reporter",
+            "labels",
+            "components",
+            "created",
+            "updated",
+            "issuetype",
+            "project",
+            "comment",
         ]
         fields = fields or default_fields
         logger.info("Exporting Jira issues: %s", jql)
@@ -652,7 +672,8 @@ class RAGExporter:
         description = f.get("description") or ""
 
         md_lines = [
-            f"# {key}: {summary}", "",
+            f"# {key}: {summary}",
+            "",
             f"**Type:** {f.get('issuetype', {}).get('name', '')}",
             f"**Status:** {f.get('status', {}).get('name', '')}",
             f"**Priority:** {(f.get('priority') or {}).get('name', '')}",
@@ -662,7 +683,11 @@ class RAGExporter:
             f"**Created:** {f.get('created', '')}",
             f"**Updated:** {f.get('updated', '')}",
             f"**Labels:** {', '.join(f.get('labels', []))}",
-            "", "## Description", "", str(description), "",
+            "",
+            "## Description",
+            "",
+            str(description),
+            "",
         ]
 
         comments = (f.get("comment") or {}).get("comments", [])
@@ -699,12 +724,14 @@ class RAGExporter:
         full_md = front_matter + markdown_body
         out_path = self.jira_dir / f"{key}.md"
         out_path.write_text(full_md, encoding="utf-8")
-        self._manifest.append({
-            "type": "jira_issue",
-            "issue_key": key,
-            "summary": summary,
-            "md_path": str(out_path.relative_to(self.output_dir)),
-        })
+        self._manifest.append(
+            {
+                "type": "jira_issue",
+                "issue_key": key,
+                "summary": summary,
+                "md_path": str(out_path.relative_to(self.output_dir)),
+            }
+        )
 
     def write_manifest(self):
         manifest_path = self.output_dir / "manifest.json"
@@ -717,13 +744,17 @@ class RAGExporter:
             "errors": self._result.errors,
             "documents": self._manifest,
         }
-        manifest_path.write_text(json.dumps(manifest_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest_data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         logger.info("Manifest written: %d documents", len(self._manifest))
 
     def run(self):
         cfg = self.config
         space_keys = cfg.get("spaces", [])
-        spaces = self.confluence.get_spaces(space_keys) if space_keys else self.confluence.get_spaces()
+        spaces = (
+            self.confluence.get_spaces(space_keys) if space_keys else self.confluence.get_spaces()
+        )
 
         total = 0
         for space in spaces:
@@ -774,7 +805,9 @@ output_dir: \"./rag_corpus\"
 
 
 def build_arg_parser():
-    p = argparse.ArgumentParser(description="Export Atlassian Confluence/Jira to a structured RAG corpus.")
+    p = argparse.ArgumentParser(
+        description="Export Atlassian Confluence/Jira to a structured RAG corpus."
+    )
     p.add_argument("--config", default=None, help="Path to YAML config file")
     p.add_argument("--version", action="version", version="atlassian-rag-exporter 2.0.0")
     p.add_argument("--print-example-config", action="store_true")
