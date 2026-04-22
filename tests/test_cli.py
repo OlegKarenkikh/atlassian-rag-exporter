@@ -1,4 +1,5 @@
 """test_cli.py — Tests for CLI argument parser and main() function."""
+
 from __future__ import annotations
 
 import sys
